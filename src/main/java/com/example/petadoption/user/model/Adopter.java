@@ -1,37 +1,48 @@
 package com.example.petadoption.user.model;
 
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 
 @Entity
 public class Adopter extends User {
 
-    private String firstName;
-    private String lastName;
+    // Full Name (single field)
+    @Column(nullable = false)
+    private String fullName;
+
+    // Phone Number
+    @Column(nullable = false)
     private String phone;
-    private String address;
-    private String city;
-    private String state;
-    private String zipCode;
 
-    // Getters and Setters
-    public String getFirstName() { return firstName; }
-    public void setFirstName(String firstName) { this.firstName = firstName; }
+    // Location / Address (one field from frontend)
+    @Column(nullable = true)
+    private String location;
 
-    public String getLastName() { return lastName; }
-    public void setLastName(String lastName) { this.lastName = lastName; }
+    /* --------------------
+       Getters & Setters
+       -------------------- */
 
-    public String getPhone() { return phone; }
-    public void setPhone(String phone) { this.phone = phone; }
+    public String getFullName() {
+        return fullName;
+    }
 
-    public String getAddress() { return address; }
-    public void setAddress(String address) { this.address = address; }
+    public void setFullName(String fullName) {
+        this.fullName = fullName;
+    }
 
-    public String getCity() { return city; }
-    public void setCity(String city) { this.city = city; }
+    public String getPhone() {
+        return phone;
+    }
 
-    public String getState() { return state; }
-    public void setState(String state) { this.state = state; }
+    public void setPhone(String phone) {
+        this.phone = phone;
+    }
 
-    public String getZipCode() { return zipCode; }
-    public void setZipCode(String zipCode) { this.zipCode = zipCode; }
+    public String getLocation() {
+        return location;
+    }
+
+    public void setLocation(String location) {
+        this.location = location;
+    }
 }

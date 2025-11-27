@@ -6,6 +6,8 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -15,8 +17,19 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 
+/**
+ * JwtAuthenticationFilter
+ *
+ * Responsibilities:
+ *  - Skip public endpoints (e.g. /api/auth/**)
+ *  - Allow OPTIONS preflight through
+ *  - Parse Bearer token if present and set Authentication if valid
+ *  - Never throw: on token errors just log and continue the filter chain
+ */
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
+
+    private static final Logger log = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
 
     @Autowired
     private JwtUtil jwtUtil;
@@ -29,50 +42,77 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
 
-    	String path = request.getRequestURI();
+        // Fast-path: allow preflight
+        if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+            filterChain.doFilter(request, response);
+            return;
+        }
 
-    	// Normalize: remove context path if present
-    	String basePath = request.getContextPath();
-    	if (basePath != null && !basePath.isEmpty() && path.startsWith(basePath)) {
-    	    path = path.substring(basePath.length());
-    	}
+        // Normalize path: remove context path if present
+        String path = request.getRequestURI();
+        String basePath = request.getContextPath();
+        if (basePath != null && !basePath.isEmpty() && path.startsWith(basePath)) {
+            path = path.substring(basePath.length());
+        }
 
-    	// Skip all /api/auth/* endpoints (login, signup, register)
-    	if (path.startsWith("/api/auth/")) {
-    	    filterChain.doFilter(request, response);
-    	    return;
-    	}
+        // Skip authentication for auth endpoints and static/uploads if desired
+        if (path.startsWith("/api/auth/") || path.startsWith("/uploads/")) {
+            filterChain.doFilter(request, response);
+            return;
+        }
 
         final String authHeader = request.getHeader("Authorization");
-        String email = null;
         String token = null;
+        String email = null;
 
-        // 🔹 Extract token from Authorization header
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            token = authHeader.substring(7);
-            try {
-                email = jwtUtil.getEmailFromToken(token);
-            } catch (Exception e) {
-                // Invalid token → just continue without authentication
-                System.out.println("Invalid JWT: " + e.getMessage());
+        try {
+            if (authHeader != null && authHeader.startsWith("Bearer ")) {
+                token = authHeader.substring(7).trim();
+                if (!token.isEmpty()) {
+                    // Extract email (or username) in a guarded way
+                    try {
+                        email = jwtUtil.getEmailFromToken(token);
+                    } catch (Exception ex) {
+                        log.debug("Failed to extract email from JWT: {}", ex.getMessage());
+                        // Do not short-circuit; just treat as unauthenticated
+                    }
+                }
             }
+        } catch (Exception ex) {
+            // Defensive: any unexpected exception reading header shouldn't stop processing
+            log.warn("Unexpected error while reading Authorization header: {}", ex.getMessage(), ex);
         }
 
-        // 🔹 If we got email and no authentication yet, validate and set context
+        // If we obtained an email and there is no authentication yet, validate and set it
         if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-            UserDetails userDetails = customUserDetailsService.loadUserByUsername(email);
+            try {
+                UserDetails userDetails = customUserDetailsService.loadUserByUsername(email);
 
-            if (jwtUtil.validateToken(token)) {
-                UsernamePasswordAuthenticationToken authToken =
-                        new UsernamePasswordAuthenticationToken(
-                                userDetails,
-                                null,
-                                userDetails.getAuthorities()
-                        );
-                SecurityContextHolder.getContext().setAuthentication(authToken);
+                // Validate token against user details. If your JwtUtil has a different signature,
+                // adapt this call accordingly (e.g. validateToken(token, userDetails))
+                boolean valid = false;
+                try {
+                    valid = jwtUtil.validateToken(token);
+                } catch (Exception ex) {
+                    log.debug("JWT validation failed for token: {}", ex.getMessage());
+                }
+
+                if (valid) {
+                    UsernamePasswordAuthenticationToken authToken =
+                            new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
+                    SecurityContextHolder.getContext().setAuthentication(authToken);
+                    log.debug("JWT authenticated user: {}", email);
+                } else {
+                    log.debug("JWT invalid or expired for user: {}", email);
+                }
+
+            } catch (Exception ex) {
+                // Could be UsernameNotFoundException or DB connection issue - log and continue
+                log.debug("Unable to load user details for '{}': {}", email, ex.getMessage());
             }
         }
 
+        // Always continue the filter chain (important for permitAll endpoints)
         filterChain.doFilter(request, response);
     }
 }
